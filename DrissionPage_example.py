@@ -1,6 +1,8 @@
 from DrissionPage import Chromium, ChromiumOptions
 from DrissionPage.errors import PageDisconnectedError
 import argparse
+import shutil
+import tempfile
 import datetime
 import logging
 import time
@@ -117,10 +119,7 @@ if platform.system() == "Linux":
             if os.path.isfile(_candidate):
                 co.set_browser_path(_candidate)
                 break
-    # 设置独立用户数据目录避免冲突
-    _user_data = os.path.join(os.path.dirname(__file__), "chrome_data")
-    os.makedirs(_user_data, exist_ok=True)
-    co.set_user_data_path(_user_data)
+    # user_data_path 在 start_browser() 每轮动态设置，此处不固定
 
 co.set_timeouts(base=1)
 
@@ -128,6 +127,7 @@ co.set_timeouts(base=1)
 EXTENSION_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "turnstilePatch"))
 co.add_extension(EXTENSION_PATH)
 
+_chrome_temp_dir: str = ""
 browser = None
 page = None
 
@@ -139,13 +139,10 @@ DEFAULT_SSO_FILE = os.path.join(_sso_dir, f"sso_{_sso_ts}.txt")
 
 
 def start_browser():
-    # 每轮从全新浏览器开始，清理用户数据目录避免旧 Cookie 污染（尤其是 sso cookie 持久化问题）。
-    global browser, page
-    import shutil as _shutil
-    _user_data = os.path.join(os.path.dirname(__file__), "chrome_data")
-    if os.path.isdir(_user_data):
-        _shutil.rmtree(_user_data, ignore_errors=True)
-    os.makedirs(_user_data, exist_ok=True)
+    # 每轮从全新浏览器开始，使用独立临时 profile 目录避免 Cookie/Session 复用。
+    global browser, page, _chrome_temp_dir
+    _chrome_temp_dir = tempfile.mkdtemp(prefix="chrome_run_")
+    co.set_user_data_path(_chrome_temp_dir)
     browser = Chromium(co)
     tabs = browser.get_tabs()
     page = tabs[-1] if tabs else browser.new_tab()
@@ -153,8 +150,8 @@ def start_browser():
 
 
 def stop_browser():
-    # 完整关闭整个浏览器实例，供下一轮重新拉起。
-    global browser, page
+    # 完整关闭整个浏览器实例，并清理本轮临时 profile，供下一轮重新拉起。
+    global browser, page, _chrome_temp_dir
     if browser is not None:
         try:
             browser.quit()
@@ -162,6 +159,9 @@ def stop_browser():
             pass
     browser = None
     page = None
+    if _chrome_temp_dir and os.path.isdir(_chrome_temp_dir):
+        shutil.rmtree(_chrome_temp_dir, ignore_errors=True)
+    _chrome_temp_dir = ""
 
 
 def restart_browser():
