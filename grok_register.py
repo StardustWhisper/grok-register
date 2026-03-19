@@ -10,7 +10,7 @@ import os
 import secrets
 import sys
 
-from email_register import get_email_and_token, get_oai_code
+from email_manager import get_email_and_token, get_oai_code
 
 
 def setup_run_logger() -> logging.Logger:
@@ -85,22 +85,12 @@ if not os.environ.get("DISPLAY") or os.environ.get("USE_XVFB") == "1":
 
 co = ChromiumOptions()
 co.auto_port()
-co.set_argument("--no-sandbox")
 co.set_argument("--disable-gpu")
 co.set_argument("--disable-dev-shm-usage")
 co.set_argument("--disable-software-rasterizer")
 
-# 从 config.json 读取代理配置给浏览器
-_browser_proxy = ""
-try:
-    import json as _json_mod
-    _cfg_path = os.path.join(os.path.dirname(__file__), "config.json")
-    if os.path.isfile(_cfg_path):
-        with open(_cfg_path, "r") as _f:
-            _cfg = _json_mod.load(_f)
-        _browser_proxy = str(_cfg.get("browser_proxy", "") or _cfg.get("proxy", "") or "")
-except Exception:
-    pass
+# 从环境变量读取代理配置给浏览器
+_browser_proxy = os.getenv("BROWSER_PROXY", "") or os.getenv("PROXY", "")
 if _browser_proxy:
     co.set_proxy(_browser_proxy)
     print(f"[*] 浏览器代理: {_browser_proxy}")
@@ -257,7 +247,7 @@ return true;
 
 
 def fill_email_and_submit(timeout=15):
-    # 复用 `email_register.py` 里的邮箱获取逻辑，保留邮箱与 token 供后续验证码步骤继续使用。
+    # 邮箱获取逻辑，保留邮箱与 token 供后续验证码步骤继续使用。
     email, dev_token = get_email_and_token()
     if not email or not dev_token:
         raise Exception("获取邮箱失败")
@@ -385,13 +375,17 @@ return true;
 
 
 
-def fill_code_and_submit(email, dev_token, timeout=60):
-    # 复用 `email_register.py` 里的验证码轮询逻辑，等待邮件到达后自动填写 OTP。
-    code = get_oai_code(dev_token, email)
+def fill_code_and_submit(email, dev_token, timeout=120):
+    print(f"\n[DEBUG] 填写验证码:")
+    print(f"  邮箱: {email}")
+    print(f"  Token: {dev_token[:30]}...")
+    print(f"[*] 正在等待邮箱 {email} 的验证码...", end="", flush=True)
+    code = get_oai_code(dev_token, email, timeout=timeout)
     if not code:
         raise Exception("获取验证码失败")
-
-    deadline = time.time() + timeout
+    
+    # 填写验证码逻辑开始
+    deadline = time.time() + 30  # 给填写留 30 秒
     while time.time() < deadline:
         try:
             filled = page.run_js(
@@ -1062,75 +1056,57 @@ def append_sso_to_txt(sso_value, output_path=DEFAULT_SSO_FILE):
 
 def push_sso_to_api(new_tokens: list):
     # 推送 SSO token 到 grok2api 管理接口。
-    # append=false：直接将本次 token 列表全量推送（覆盖）。
-    # append=true（默认）：先 GET 查询线上现有 token，合并本次后全量推送。
+    # 使用新开发的 /v1/admin/tokens/append 接口，支持自动追加和 merge 更新。
     import json
     import urllib3
     import requests
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-    config_path = os.path.join(os.path.dirname(__file__), "config.json")
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            conf = json.load(f)
-    except Exception as e:
-        print(f"[Warn] 读取 config.json 失败，跳过推送: {e}")
-        return
-
-    api_conf = conf.get("api", {})
-    endpoint = str(api_conf.get("endpoint", "")).strip()
-    api_token = str(api_conf.get("token", "")).strip()
-    append_mode = api_conf.get("append", True)
+    endpoint = os.getenv("GROK2API_ENDPOINT", "").strip()
+    api_token = os.getenv("GROK2API_TOKEN", "").strip()
 
     if not endpoint or not api_token:
         return
 
+    # 自动修正为新的 /v1/admin/tokens/append 路径
+    if "/admin/tokens" in endpoint:
+        endpoint = endpoint.replace("/admin/tokens", "/admin/tokens/append")
+    elif "/admin" in endpoint:
+        endpoint = endpoint.replace("/admin", "/v1/admin/tokens/append")
+    elif not endpoint.endswith("/v1/admin/tokens/append"):
+        endpoint = endpoint.rstrip("/") + "/v1/admin/tokens/append"
+
+    # 新接口走标准的 Bearer 鉴权
     headers = {
         "Authorization": f"Bearer {api_token}",
         "Content-Type": "application/json",
     }
 
-    tokens_to_push = [t for t in new_tokens if t]
-
-    if append_mode:
-        try:
-            get_resp = requests.get(endpoint, headers=headers, timeout=15, verify=False)
-            if get_resp.status_code == 200:
-                data = get_resp.json()
-                # 兼容两种响应格式：
-                # 新版: {"tokens": {"ssoBasic": [...]}}
-                # 旧版: {"ssoBasic": [...]}
-                if isinstance(data, dict) and isinstance(data.get("tokens"), dict):
-                    existing = data["tokens"].get("ssoBasic", [])
-                else:
-                    existing = data.get("ssoBasic", []) if isinstance(data, dict) else []
-                existing_tokens = [
-                    item["token"] if isinstance(item, dict) else str(item)
-                    for item in existing if item
-                ]
-                seen = set()
-                deduped = []
-                for t in existing_tokens + tokens_to_push:
-                    if t not in seen:
-                        seen.add(t)
-                        deduped.append(t)
-                tokens_to_push = deduped
-                print(f"[*] 查询到线上 {len(existing_tokens)} 个 token，合并本次 {len(new_tokens)} 个，共 {len(deduped)} 个")
-            else:
-                print(f"[Warn] 查询线上 token 失败: HTTP {get_resp.status_code}，仅推送本次 token")
-        except Exception as e:
-            print(f"[Warn] 查询线上 token 异常: {e}，仅推送本次 token")
+    tokens_list = [{"token": t} for t in new_tokens if t]
+    if not tokens_list:
+        return
 
     try:
+        # 使用批量追加模式：{"pool": "default", "tokens": [...]}
+        payload = {
+            "pool": "default",
+            "tokens": tokens_list
+        }
+        
         resp = requests.post(
             endpoint,
-            json={"ssoBasic": tokens_to_push},
+            json=payload,
             headers=headers,
             timeout=60,
             verify=False,
         )
+        
         if resp.status_code == 200:
-            print(f"[*] SSO token 已推送到 API（共 {len(tokens_to_push)} 个）: {endpoint}")
+            result = resp.json()
+            summary = result.get("summary", {})
+            print(f"[*] SSO token 已追加到 API: {endpoint}")
+            print(f"    - 新增: {summary.get('appended', 0)}")
+            print(f"    - 更新: {summary.get('updated', 0)}")
         else:
             print(f"[Warn] 推送 API 返回异常: HTTP {resp.status_code} {resp.text[:200]}")
     except Exception as e:
@@ -1169,15 +1145,11 @@ def run_single_registration(output_path=DEFAULT_SSO_FILE, extract_numbers=False)
 
 
 def load_run_count() -> int:
-    # 从 config.json 读取默认执行轮数，配置不存在时返回 10。
-    config_path = os.path.join(os.path.dirname(__file__), "config.json")
+    # 从环境变量读取默认执行轮数，配置不存在时返回 10。
     try:
-        import json
-        with open(config_path, "r", encoding="utf-8") as f:
-            conf = json.load(f)
-        v = conf.get("run", {}).get("count")
-        if isinstance(v, int) and v >= 0:
-            return v
+        v = os.getenv("RUN_COUNT")
+        if v is not None:
+            return int(v)
     except Exception:
         pass
     return 10
