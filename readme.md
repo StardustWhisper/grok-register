@@ -8,7 +8,7 @@
 - **拟人化邮箱**: 自动生成拟人化的邮箱前缀（如 `firstname` + `lastname` + `year`），不包含特殊符号，确保与 API 完美兼容。
 - **多域名支持**: 支持配置多个邮箱域名，注册时随机选择，降低单一域名被封禁的风险。
 - **验证码处理**: 自动提取并自动填写 6 位数字或 `XXX-XXX` 格式验证码。
-- **Token 同步**: 注册成功后自动将 SSO Token 推送到 [grok2api](https://github.com/chenyme/grok2api) 管理后台（使用新的 `/append` 接口）。
+- **Token 同步**: 注册成功后自动将 SSO Token 推送到 [Grok2API](https://github.com/StardustWhisper/Grok2API) 管理后台（使用新的 `/append` 接口）。
 - **指纹伪装**: 模拟 Safari/Chrome 浏览器指纹，降低被风控风险。
 - **环境适配**: 支持 macOS/Windows 桌面运行，以及 Linux 无头服务器运行 (自动启用 Xvfb)。
 
