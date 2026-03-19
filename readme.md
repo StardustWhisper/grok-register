@@ -69,3 +69,11 @@ python grok_register.py --count 5
 ## 安全提示
 
 请确保不要将包含真实密码和 Token 的 `.env` 文件提交到代码仓库。本项目已默认在 `.gitignore` 中忽略 `.env`。
+
+## 致谢
+
+- [grok-register](https://github.com/ReinerBRO/grok-register) — 原始项目
+- [cloudflare_temp_email](https://github.com/dreamhunter2333/cloudflare_temp_email) — 临时邮箱 API 原始项目
+- [grok2api](https://github.com/chenyme/grok2api) — Grok API 代理项目
+- [DrissionPage](https://github.com/g1879/DrissionPage) — 核心自动化框架
+
